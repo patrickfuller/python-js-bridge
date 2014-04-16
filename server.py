@@ -24,18 +24,12 @@ import tornadio.router
 import tornadio.server
 
 import methods
-from config import HTTP_PORT, TCP_PORT
-
-# Subbing the port number into index.html means the config file works on the
-# server and the client without additional work
-with open("index.html") as index_file:
-    index = index_file.read() % {"port": HTTP_PORT}
 
 
 class IndexHandler(tornado.web.RequestHandler):
 
     def get(self):
-        self.write(index)
+        self.write(INDEX)
 
 
 class ClientConnection(tornadio.SocketConnection):
@@ -56,24 +50,36 @@ class ClientConnection(tornadio.SocketConnection):
         self.send({"result": result, "error": error, "id": message["id"]})
 
 
-WebClientRouter = tornadio.get_router(ClientConnection)
+if __name__ == "__main__":
+    import argparse
+    import webbrowser
 
-# This enables both websockets and the older flash protocol as a fallback
-# for people somehow still not on HTML5. The flash backup will only work with
-# root access, but it's not all that important to have it running.
-ROOT = os.path.normpath(os.path.dirname(__file__))
-handler = [(r"/", IndexHandler), WebClientRouter.route()]
-kwargs = {"enabled_protocols": ["websocket", "flashsocket",
-                                "xhr-multipart", "xhr-polling"],
-          "flash_policy_port": 843,
-          "flash_policy_file": os.path.join(ROOT, "flashpolicy.xml"),
-          "static_path": os.path.join(ROOT, "static"),
-          "socket_io_port": HTTP_PORT}
-application = tornado.web.Application(handler, **kwargs)
+    root = os.path.normpath(os.path.dirname(__file__))
 
-context = zmq.Context()
-socket = context.socket(zmq.REP)
-socket.bind("tcp://127.0.0.1:%d" % TCP_PORT)
-stream = zmqstream.ZMQStream(socket, tornado.ioloop.IOLoop.instance())
-stream.on_recv(ClientConnection.on_message)
-tornadio.server.SocketServer(application)
+    parser = argparse.ArgumentParser(description="Starts a websocket-based "
+                                     "webserver and client")
+    parser.add_argument("--http-port", type=int, default=8000, help="The port "
+                        "on which to serve the website")
+    parser.add_argument("--tcp-port", type=int, default=8001, help="The "
+                        "server-side tcp connection for python-js interaction")
+    args = parser.parse_args()
+
+    with open(os.path.join(root, "index.html")) as index_file:
+        INDEX = index_file.read() % {"port": args.http_port}
+
+    WebClientRouter = tornadio.get_router(ClientConnection)
+    handler = [(r"/", IndexHandler), WebClientRouter.route(),
+               (r'/static/(.*)', tornado.web.StaticFileHandler,
+                {'path': root})]
+    kwargs = {"enabled_protocols": ["websocket"],
+              "socket_io_port": args.http_port}
+    application = tornado.web.Application(handler, **kwargs)
+
+    context = zmq.Context()
+    socket = context.socket(zmq.REP)
+    socket.bind("tcp://127.0.0.1:%d" % args.tcp_port)
+    stream = zmqstream.ZMQStream(socket, tornado.ioloop.IOLoop.instance())
+    stream.on_recv(ClientConnection.on_message)
+    tornadio.server.SocketServer(application)
+
+    webbrowser.open("http://localhost:%d/" % args.http_port, new=2)
